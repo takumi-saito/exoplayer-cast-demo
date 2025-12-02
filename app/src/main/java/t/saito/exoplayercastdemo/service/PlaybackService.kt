@@ -21,6 +21,7 @@ import com.google.android.exoplayer2.ext.mediasession.MediaSessionConnector
 import t.saito.exoplayercastdemo.MainActivity
 import t.saito.exoplayercastdemo.R
 import t.saito.exoplayercastdemo.util.Constants
+import t.saito.exoplayercastdemo.data.model.MediaItem as AppMediaItem
 
 class PlaybackService : Service() {
     private lateinit var player: ExoPlayer
@@ -30,6 +31,7 @@ class PlaybackService : Service() {
 
     private var isForegroundService = false
     private var currentMediaUri: Uri? = null
+    private var currentMediaItem: AppMediaItem? = null
 
     inner class PlaybackServiceBinder : Binder() {
         fun getService(): PlaybackService = this@PlaybackService
@@ -94,10 +96,18 @@ class PlaybackService : Service() {
 
     fun getPlayer(): ExoPlayer = player
 
-    fun playMedia(uri: Uri) {
-        currentMediaUri = uri
-        val mediaItem = MediaItem.fromUri(uri)
-        player.setMediaItem(mediaItem)
+    // State restoration methods
+    fun getCurrentMediaItem(): AppMediaItem? = currentMediaItem
+    fun getCurrentMediaUri(): Uri? = currentMediaUri
+    fun isCurrentlyPlaying(): Boolean = player.isPlaying
+    fun getCurrentPosition(): Long = player.currentPosition
+    fun getDuration(): Long = player.duration
+
+    fun playMedia(mediaItem: AppMediaItem) {
+        currentMediaItem = mediaItem
+        currentMediaUri = mediaItem.uri
+        val exoMediaItem = MediaItem.fromUri(mediaItem.uri)
+        player.setMediaItem(exoMediaItem)
         player.prepare()
         player.play()
 

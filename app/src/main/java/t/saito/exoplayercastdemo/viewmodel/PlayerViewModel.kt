@@ -14,6 +14,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import t.saito.exoplayercastdemo.data.model.MediaItem
 import t.saito.exoplayercastdemo.data.model.PlaybackState
+import t.saito.exoplayercastdemo.service.PlaybackService
 import t.saito.exoplayercastdemo.service.PlaybackServiceConnection
 
 class PlayerViewModel(application: Application) : AndroidViewModel(application) {
@@ -39,6 +40,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             serviceConnection.service.collect { service ->
                 service?.let {
+                    restorePlaybackState(it)
                     setupPlayerListener(it.getPlayer())
                 }
             }
@@ -87,9 +89,26 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         }.also { player.addListener(it) }
     }
 
+    private fun restorePlaybackState(service: PlaybackService) {
+        val currentItem = service.getCurrentMediaItem()
+        if (currentItem != null) {
+            _currentMedia.value = currentItem
+            _currentPosition.value = service.getCurrentPosition()
+            _duration.value = service.getDuration()
+            _playbackState.value = if (service.isCurrentlyPlaying()) {
+                PlaybackState.Playing
+            } else {
+                PlaybackState.Paused
+            }
+            if (service.isCurrentlyPlaying()) {
+                startPositionUpdate()
+            }
+        }
+    }
+
     fun playMedia(mediaItem: MediaItem) {
         _currentMedia.value = mediaItem
-        serviceConnection.service.value?.playMedia(mediaItem.uri)
+        serviceConnection.service.value?.playMedia(mediaItem)
     }
 
     fun togglePlayPause() {
