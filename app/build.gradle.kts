@@ -56,6 +56,11 @@ dependencies {
     implementation(libs.exoplayer.ui)
     implementation(libs.exoplayer.session)
 
+    // Cast Support
+    implementation(libs.exoplayer.cast)
+    implementation(libs.androidx.mediarouter)
+    implementation(libs.play.services.cast.framework)
+
     // ViewModel Compose
     implementation(libs.androidx.lifecycle.viewmodel.compose)
 

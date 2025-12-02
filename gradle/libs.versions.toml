@@ -11,6 +11,8 @@ composeBom = "2024.09.00"
 exoplayer = "2.19.1"
 lifecycleViewmodelCompose = "2.6.1"
 navigationCompose = "2.7.0"
+mediaRouter = "1.7.0"
+castFramework = "21.5.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -41,6 +43,11 @@ androidx-navigation-compose = { group = "androidx.navigation", name = "navigatio
 
 # Material Icons Extended
 androidx-compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
+
+# Cast Support
+exoplayer-cast = { group = "com.google.android.exoplayer", name = "extension-cast", version.ref = "exoplayer" }
+androidx-mediarouter = { group = "androidx.mediarouter", name = "mediarouter", version.ref = "mediaRouter" }
+play-services-cast-framework = { group = "com.google.android.gms", name = "play-services-cast-framework", version.ref = "castFramework" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

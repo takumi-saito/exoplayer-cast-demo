@@ -32,6 +32,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     private val _duration = MutableStateFlow(0L)
     val duration: StateFlow<Long> = _duration.asStateFlow()
 
+    private val _isCasting = MutableStateFlow(false)
+    val isCasting: StateFlow<Boolean> = _isCasting.asStateFlow()
+
     private var positionUpdateJob: Job? = null
     private var playerListener: Player.Listener? = null
 
@@ -104,6 +107,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 startPositionUpdate()
             }
         }
+        // Update Cast status
+        _isCasting.value = service.isCasting()
     }
 
     fun playMedia(mediaItem: MediaItem) {
@@ -146,9 +151,10 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         stopPositionUpdate()
         positionUpdateJob = viewModelScope.launch {
             while (isActive) {
-                val player = serviceConnection.service.value?.getPlayer()
-                player?.let {
-                    _currentPosition.value = it.currentPosition
+                val service = serviceConnection.service.value
+                service?.let {
+                    _currentPosition.value = it.getPlayer().currentPosition
+                    _isCasting.value = it.isCasting()
                 }
                 delay(100)
             }

@@ -18,13 +18,18 @@ import com.google.android.exoplayer2.ExoPlayer
 import com.google.android.exoplayer2.MediaItem
 import com.google.android.exoplayer2.Player
 import com.google.android.exoplayer2.ext.mediasession.MediaSessionConnector
+import com.google.android.exoplayer2.ext.cast.CastPlayer
+import com.google.android.exoplayer2.ext.cast.SessionAvailabilityListener
+import com.google.android.gms.cast.framework.CastContext
 import t.saito.exoplayercastdemo.MainActivity
 import t.saito.exoplayercastdemo.R
 import t.saito.exoplayercastdemo.util.Constants
 import t.saito.exoplayercastdemo.data.model.MediaItem as AppMediaItem
 
 class PlaybackService : Service() {
-    private lateinit var player: ExoPlayer
+    private lateinit var exoPlayer: ExoPlayer
+    private var castPlayer: CastPlayer? = null
+    private lateinit var currentPlayer: Player
     private lateinit var mediaSession: MediaSessionCompat
     private lateinit var mediaSessionConnector: MediaSessionConnector
     private val binder = PlaybackServiceBinder()
@@ -32,6 +37,7 @@ class PlaybackService : Service() {
     private var isForegroundService = false
     private var currentMediaUri: Uri? = null
     private var currentMediaItem: AppMediaItem? = null
+    private var isCastSession = false
 
     inner class PlaybackServiceBinder : Binder() {
         fun getService(): PlaybackService = this@PlaybackService
@@ -45,24 +51,52 @@ class PlaybackService : Service() {
         super.onCreate()
 
         // Initialize ExoPlayer
-        player = ExoPlayer.Builder(this).build()
+        exoPlayer = ExoPlayer.Builder(this).build()
+        currentPlayer = exoPlayer
+
+        // Initialize CastPlayer if Cast is available
+        try {
+            val castContext = CastContext.getSharedInstance(this)
+            castPlayer = CastPlayer(castContext).apply {
+                setSessionAvailabilityListener(object : SessionAvailabilityListener {
+                    override fun onCastSessionAvailable() {
+                        switchToCastPlayer()
+                    }
+
+                    override fun onCastSessionUnavailable() {
+                        switchToLocalPlayer()
+                    }
+                })
+            }
+        } catch (e: Exception) {
+            // Cast not available (emulator or no Google Play Services)
+            castPlayer = null
+        }
 
         // Initialize MediaSession
         mediaSession = MediaSessionCompat(this, "PlaybackService").apply {
             isActive = true
         }
 
-        // Connect MediaSession with ExoPlayer
+        // Connect MediaSession with current player
         mediaSessionConnector = MediaSessionConnector(mediaSession).apply {
-            setPlayer(player)
+            setPlayer(currentPlayer)
         }
 
         // Add player listener
-        player.addListener(object : Player.Listener {
+        exoPlayer.addListener(createPlayerListener())
+        castPlayer?.addListener(createPlayerListener())
+
+        // Create notification channel
+        createNotificationChannel()
+    }
+
+    private fun createPlayerListener(): Player.Listener {
+        return object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 when (playbackState) {
                     Player.STATE_READY -> {
-                        if (player.playWhenReady) {
+                        if (currentPlayer.playWhenReady) {
                             updateNotification()
                         }
                     }
@@ -76,10 +110,56 @@ class PlaybackService : Service() {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 updateNotification()
             }
-        })
+        }
+    }
 
-        // Create notification channel
-        createNotificationChannel()
+    private fun switchToCastPlayer() {
+        if (isCastSession) return
+
+        val currentPosition = exoPlayer.currentPosition
+        val playWhenReady = exoPlayer.playWhenReady
+
+        mediaSessionConnector.setPlayer(null)
+        exoPlayer.playWhenReady = false
+
+        currentPlayer = castPlayer ?: return
+        isCastSession = true
+
+        currentMediaUri?.let { uri ->
+            val mediaItem = MediaItem.fromUri(uri)
+            castPlayer?.setMediaItem(mediaItem)
+            castPlayer?.seekTo(currentPosition)
+            castPlayer?.playWhenReady = playWhenReady
+            castPlayer?.prepare()
+        }
+
+        mediaSessionConnector.setPlayer(currentPlayer)
+        updateNotification()
+    }
+
+    private fun switchToLocalPlayer() {
+        if (!isCastSession) return
+
+        val castPlayerInstance = castPlayer ?: return
+        val currentPosition = castPlayerInstance.currentPosition
+        val playWhenReady = castPlayerInstance.playWhenReady
+
+        mediaSessionConnector.setPlayer(null)
+        castPlayerInstance.playWhenReady = false
+
+        currentPlayer = exoPlayer
+        isCastSession = false
+
+        currentMediaUri?.let { uri ->
+            val mediaItem = MediaItem.fromUri(uri)
+            exoPlayer.setMediaItem(mediaItem)
+            exoPlayer.seekTo(currentPosition)
+            exoPlayer.playWhenReady = playWhenReady
+            exoPlayer.prepare()
+        }
+
+        mediaSessionConnector.setPlayer(currentPlayer)
+        updateNotification()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -90,26 +170,31 @@ class PlaybackService : Service() {
     override fun onDestroy() {
         mediaSession.release()
         mediaSessionConnector.setPlayer(null)
-        player.release()
+        exoPlayer.release()
+        castPlayer?.release()
         super.onDestroy()
     }
 
-    fun getPlayer(): ExoPlayer = player
+    fun getPlayer(): Player = currentPlayer
+
+    fun isCasting(): Boolean = isCastSession
+
+    fun getCastPlayer(): CastPlayer? = castPlayer
 
     // State restoration methods
     fun getCurrentMediaItem(): AppMediaItem? = currentMediaItem
     fun getCurrentMediaUri(): Uri? = currentMediaUri
-    fun isCurrentlyPlaying(): Boolean = player.isPlaying
-    fun getCurrentPosition(): Long = player.currentPosition
-    fun getDuration(): Long = player.duration
+    fun isCurrentlyPlaying(): Boolean = currentPlayer.isPlaying
+    fun getCurrentPosition(): Long = currentPlayer.currentPosition
+    fun getDuration(): Long = currentPlayer.duration
 
     fun playMedia(mediaItem: AppMediaItem) {
         currentMediaItem = mediaItem
         currentMediaUri = mediaItem.uri
         val exoMediaItem = MediaItem.fromUri(mediaItem.uri)
-        player.setMediaItem(exoMediaItem)
-        player.prepare()
-        player.play()
+        currentPlayer.setMediaItem(exoMediaItem)
+        currentPlayer.prepare()
+        currentPlayer.play()
 
         if (!isForegroundService) {
             startForeground(Constants.NOTIFICATION_ID, createNotification())
@@ -120,17 +205,17 @@ class PlaybackService : Service() {
     }
 
     fun pausePlayback() {
-        player.pause()
+        currentPlayer.pause()
         updateNotification()
     }
 
     fun resumePlayback() {
-        player.play()
+        currentPlayer.play()
         updateNotification()
     }
 
     fun stopPlayback() {
-        player.stop()
+        currentPlayer.stop()
         stopForeground(STOP_FOREGROUND_REMOVE)
         isForegroundService = false
     }
@@ -159,7 +244,7 @@ class PlaybackService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val playPauseAction = if (player.isPlaying) {
+        val playPauseAction = if (currentPlayer.isPlaying) {
             NotificationCompat.Action(
                 android.R.drawable.ic_media_pause,
                 "Pause",
@@ -189,8 +274,8 @@ class PlaybackService : Service() {
         )
 
         return NotificationCompat.Builder(this, Constants.NOTIFICATION_CHANNEL_ID)
-            .setContentTitle("Media Player")
-            .setContentText("Playing media")
+            .setContentTitle(if (isCastSession) "Casting" else "Media Player")
+            .setContentText(currentMediaItem?.title ?: "Playing media")
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentIntent(pendingIntent)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
