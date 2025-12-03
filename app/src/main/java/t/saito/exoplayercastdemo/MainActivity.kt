@@ -3,12 +3,12 @@ package t.saito.exoplayercastdemo
 import android.Manifest
 import android.os.Build
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
+import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.ViewModelProvider
 import t.saito.exoplayercastdemo.service.PlaybackServiceConnection
 import t.saito.exoplayercastdemo.ui.navigation.AppNavigation
@@ -16,7 +16,7 @@ import t.saito.exoplayercastdemo.ui.theme.ExoPlayerCastDemoTheme
 import t.saito.exoplayercastdemo.viewmodel.MediaViewModel
 import t.saito.exoplayercastdemo.viewmodel.PlayerViewModel
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
     private lateinit var mediaViewModel: MediaViewModel
     private lateinit var playerViewModel: PlayerViewModel
     private lateinit var serviceConnection: PlaybackServiceConnection

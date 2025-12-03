@@ -1,5 +1,6 @@
 package t.saito.exoplayercastdemo.ui.component
 
+import android.view.ContextThemeWrapper
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
@@ -11,9 +12,16 @@ fun CastButton(
     modifier: Modifier = Modifier
 ) {
     AndroidView(
-        factory = { context ->
-            MediaRouteButton(context).apply {
-                CastButtonFactory.setUpMediaRouteButton(context, this)
+        factory = { ctx ->
+            // Create a themed context wrapper with Material Design colors
+            // Use ctx from factory which is connected to the Activity
+            val themedContext = ContextThemeWrapper(
+                ctx,
+                com.google.android.material.R.style.Theme_MaterialComponents_Light
+            )
+
+            MediaRouteButton(themedContext).apply {
+                CastButtonFactory.setUpMediaRouteButton(themedContext, this)
             }
         },
         modifier = modifier

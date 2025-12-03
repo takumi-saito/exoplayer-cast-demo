@@ -60,6 +60,7 @@ dependencies {
     implementation(libs.exoplayer.cast)
     implementation(libs.androidx.mediarouter)
     implementation(libs.play.services.cast.framework)
+    implementation("com.google.android.material:material:1.11.0")
 
     // ViewModel Compose
     implementation(libs.androidx.lifecycle.viewmodel.compose)
