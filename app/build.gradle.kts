@@ -62,6 +62,10 @@ dependencies {
     implementation(libs.play.services.cast.framework)
     implementation("com.google.android.material:material:1.11.0")
 
+    // Ktor Server (Local Media Server for Cast)
+    implementation(libs.ktor.server.core)
+    implementation(libs.ktor.server.cio)
+
     // ViewModel Compose
     implementation(libs.androidx.lifecycle.viewmodel.compose)
 

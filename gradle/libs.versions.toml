@@ -13,6 +13,7 @@ lifecycleViewmodelCompose = "2.6.1"
 navigationCompose = "2.7.0"
 mediaRouter = "1.7.0"
 castFramework = "21.5.0"
+ktor = "2.3.7"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -48,6 +49,10 @@ androidx-compose-material-icons-extended = { group = "androidx.compose.material"
 exoplayer-cast = { group = "com.google.android.exoplayer", name = "extension-cast", version.ref = "exoplayer" }
 androidx-mediarouter = { group = "androidx.mediarouter", name = "mediarouter", version.ref = "mediaRouter" }
 play-services-cast-framework = { group = "com.google.android.gms", name = "play-services-cast-framework", version.ref = "castFramework" }
+
+# Ktor Server (Local Media Server for Cast)
+ktor-server-core = { group = "io.ktor", name = "ktor-server-core", version.ref = "ktor" }
+ktor-server-cio = { group = "io.ktor", name = "ktor-server-cio", version.ref = "ktor" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

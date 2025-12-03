@@ -5,14 +5,19 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.net.Uri
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
+import android.widget.Toast
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import androidx.media.session.MediaButtonReceiver
 import com.google.android.exoplayer2.ExoPlayer
 import com.google.android.exoplayer2.MediaItem
@@ -21,10 +26,21 @@ import com.google.android.exoplayer2.ext.mediasession.MediaSessionConnector
 import com.google.android.exoplayer2.ext.cast.CastPlayer
 import com.google.android.exoplayer2.ext.cast.SessionAvailabilityListener
 import com.google.android.gms.cast.framework.CastContext
+import kotlinx.coroutines.CancellableContinuation
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import t.saito.exoplayercastdemo.MainActivity
 import t.saito.exoplayercastdemo.R
 import t.saito.exoplayercastdemo.util.Constants
+import t.saito.exoplayercastdemo.util.MediaServerUtils
+import t.saito.exoplayercastdemo.util.NetworkUtils
 import t.saito.exoplayercastdemo.data.model.MediaItem as AppMediaItem
+import kotlin.coroutines.resume
 
 class PlaybackService : Service() {
     private lateinit var exoPlayer: ExoPlayer
@@ -38,6 +54,41 @@ class PlaybackService : Service() {
     private var currentMediaUri: Uri? = null
     private var currentMediaItem: AppMediaItem? = null
     private var isCastSession = false
+
+    // Local Media Server support
+    private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private var serverUrlContinuation: CancellableContinuation<String?>? = null
+    private var isLocalServerRunning = false
+
+    // BroadcastReceiver for server state notifications
+    private val serverStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            android.util.Log.d("PlaybackService", "serverStateReceiver: action=${intent.action}")
+            when (intent.action) {
+                Constants.ACTION_SERVER_STARTED -> {
+                    val port = intent.getIntExtra(Constants.KEY_SERVER_PORT, -1)
+                    android.util.Log.d("PlaybackService", "Server started on port $port")
+                    val ipAddress = NetworkUtils.getLocalIpAddress(context)
+                    if (ipAddress != null && port > 0 && currentMediaUri != null) {
+                        val url = MediaServerUtils.generateServerUrl(ipAddress, port, currentMediaUri!!)
+                        android.util.Log.d("PlaybackService", "Generated server URL: $url")
+                        isLocalServerRunning = true
+                        serverUrlContinuation?.resume(url)
+                    } else {
+                        android.util.Log.e("PlaybackService", "Failed to generate server URL - ip=$ipAddress, port=$port")
+                        serverUrlContinuation?.resume(null)
+                    }
+                    serverUrlContinuation = null
+                }
+                Constants.ACTION_SERVER_START_FAILED -> {
+                    val error = intent.getStringExtra(Constants.KEY_ERROR_MESSAGE) ?: "Unknown error"
+                    android.util.Log.e("PlaybackService", "Server start failed: $error")
+                    serverUrlContinuation?.resume(null)
+                    serverUrlContinuation = null
+                }
+            }
+        }
+    }
 
     inner class PlaybackServiceBinder : Binder() {
         fun getService(): PlaybackService = this@PlaybackService
@@ -89,6 +140,18 @@ class PlaybackService : Service() {
 
         // Create notification channel
         createNotificationChannel()
+
+        // Register BroadcastReceiver for local media server notifications
+        val intentFilter = IntentFilter().apply {
+            addAction(Constants.ACTION_SERVER_STARTED)
+            addAction(Constants.ACTION_SERVER_START_FAILED)
+        }
+        // Android 14 (API 34)以降はRECEIVER_NOT_EXPORTEDが必須
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(serverStateReceiver, intentFilter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(serverStateReceiver, intentFilter)
+        }
     }
 
     private fun createPlayerListener(tag: String): Player.Listener {
@@ -178,21 +241,87 @@ class PlaybackService : Service() {
             return
         }
 
-        // Check if current media is castable (http or https only)
-        currentMediaUri?.let { uri ->
-            android.util.Log.d("PlaybackService", "Current media URI: $uri")
-            val scheme = uri.scheme?.lowercase()
-            android.util.Log.d("PlaybackService", "URI scheme: $scheme")
-            if (scheme != "http" && scheme != "https") {
-                // Cannot cast local media, stay on local player
-                android.util.Log.w("PlaybackService", "Cannot cast local media with scheme: $scheme")
-                return
-            }
-        } ?: run {
-            // No media to cast
+        // Check if current media is available
+        val uri = currentMediaUri
+        if (uri == null) {
             android.util.Log.w("PlaybackService", "No media to cast - currentMediaUri is null")
             return
         }
+
+        android.util.Log.d("PlaybackService", "Current media URI: $uri")
+        val scheme = uri.scheme?.lowercase()
+        android.util.Log.d("PlaybackService", "URI scheme: $scheme")
+
+        when (scheme) {
+            "http", "https" -> {
+                // Remote URL - cast directly
+                proceedWithCast(uri)
+            }
+            "content" -> {
+                // Local content - need local media server
+                android.util.Log.d("PlaybackService", "Local content detected, starting local media server...")
+                switchToCastPlayerAsync()
+            }
+            else -> {
+                android.util.Log.w("PlaybackService", "Unsupported URI scheme: $scheme")
+            }
+        }
+    }
+
+    private fun switchToCastPlayerAsync() {
+        serviceScope.launch {
+            val uri = currentMediaUri ?: return@launch
+
+            // Validate network availability
+            if (!NetworkUtils.validateNetworkForCast(this@PlaybackService)) {
+                android.util.Log.e("PlaybackService", "Network not available for Cast")
+                handleServerStartFailure("Wi-Fi接続を確認してください")
+                return@launch
+            }
+
+            // Start local media server
+            val serverUrl = startLocalMediaServerAsync(uri)
+            if (serverUrl == null) {
+                android.util.Log.e("PlaybackService", "Failed to start local media server")
+                handleServerStartFailure("ローカルメディアサーバーを起動できませんでした")
+                return@launch
+            }
+
+            android.util.Log.d("PlaybackService", "Local media server started, URL: $serverUrl")
+
+            // Proceed with cast using server URL
+            proceedWithCast(Uri.parse(serverUrl))
+        }
+    }
+
+    private suspend fun startLocalMediaServerAsync(contentUri: Uri): String? =
+        suspendCancellableCoroutine { continuation ->
+            serverUrlContinuation = continuation
+
+            // Start local media server service
+            val intent = Intent(this, LocalMediaServerService::class.java).apply {
+                action = Constants.ACTION_START_SERVER
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent)
+            } else {
+                startService(intent)
+            }
+
+            // Timeout handling
+            serviceScope.launch {
+                delay(Constants.SERVER_STARTUP_TIMEOUT_MS)
+                if (continuation.isActive) {
+                    android.util.Log.e("PlaybackService", "Server startup timeout")
+                    continuation.resume(null)
+                    serverUrlContinuation = null
+                }
+            }
+        }
+
+    private fun proceedWithCast(castableUri: Uri) {
+        android.util.Log.d("PlaybackService", "proceedWithCast: $castableUri")
 
         val currentPosition = exoPlayer.currentPosition
         val playWhenReady = exoPlayer.playWhenReady
@@ -204,46 +333,54 @@ class PlaybackService : Service() {
         currentPlayer = castPlayer ?: return
         isCastSession = true
 
-        currentMediaUri?.let { uri ->
-            // Determine specific mimeType from URI extension
-            val uriString = uri.toString().lowercase()
-            val mimeType = when {
-                uriString.endsWith(".mp4") -> "video/mp4"
-                uriString.endsWith(".mp3") -> "audio/mpeg"
-                uriString.endsWith(".m4a") -> "audio/mp4"
-                uriString.endsWith(".webm") -> "video/webm"
-                uriString.endsWith(".mkv") -> "video/x-matroska"
-                currentMediaItem?.type == t.saito.exoplayercastdemo.data.model.MediaType.VIDEO -> "video/mp4"
-                currentMediaItem?.type == t.saito.exoplayercastdemo.data.model.MediaType.AUDIO -> "audio/mpeg"
-                else -> "video/mp4"
-            }
-
-            // Build MediaMetadata with title and artist
-            val mediaMetadata = com.google.android.exoplayer2.MediaMetadata.Builder()
-                .setTitle(currentMediaItem?.title ?: "Unknown Title")
-                .setArtist(currentMediaItem?.artist)
-                .build()
-
-            val mediaItem = MediaItem.Builder()
-                .setUri(uri)
-                .setMimeType(mimeType)
-                .setMediaMetadata(mediaMetadata)
-                .build()
-
-            android.util.Log.d("PlaybackService", "Setting media item on CastPlayer - title: ${currentMediaItem?.title}, mimeType: $mimeType")
-            castPlayer?.setMediaItem(mediaItem)
-            castPlayer?.seekTo(currentPosition)
-            castPlayer?.playWhenReady = playWhenReady
-            castPlayer?.prepare()
-            android.util.Log.d("PlaybackService", "CastPlayer prepared and ready to play")
+        // Determine specific mimeType from URI extension
+        val uriString = castableUri.toString().lowercase()
+        val mimeType = when {
+            uriString.endsWith(".mp4") -> "video/mp4"
+            uriString.endsWith(".mp3") -> "audio/mpeg"
+            uriString.endsWith(".m4a") -> "audio/mp4"
+            uriString.endsWith(".webm") -> "video/webm"
+            uriString.endsWith(".mkv") -> "video/x-matroska"
+            currentMediaItem?.type == t.saito.exoplayercastdemo.data.model.MediaType.VIDEO -> "video/mp4"
+            currentMediaItem?.type == t.saito.exoplayercastdemo.data.model.MediaType.AUDIO -> "audio/mpeg"
+            else -> "video/mp4"
         }
+
+        // Build MediaMetadata with title and artist
+        val mediaMetadata = com.google.android.exoplayer2.MediaMetadata.Builder()
+            .setTitle(currentMediaItem?.title ?: "Unknown Title")
+            .setArtist(currentMediaItem?.artist)
+            .build()
+
+        val mediaItem = MediaItem.Builder()
+            .setUri(castableUri)
+            .setMimeType(mimeType)
+            .setMediaMetadata(mediaMetadata)
+            .build()
+
+        android.util.Log.d("PlaybackService", "Setting media item on CastPlayer - title: ${currentMediaItem?.title}, mimeType: $mimeType, uri: $castableUri")
+        castPlayer?.setMediaItem(mediaItem)
+        castPlayer?.seekTo(currentPosition)
+        castPlayer?.playWhenReady = playWhenReady
+        castPlayer?.prepare()
+        android.util.Log.d("PlaybackService", "CastPlayer prepared and ready to play")
 
         mediaSessionConnector.setPlayer(currentPlayer)
         updateNotification()
-        android.util.Log.d("PlaybackService", "switchToCastPlayer() completed successfully")
+        android.util.Log.d("PlaybackService", "proceedWithCast() completed successfully")
+    }
+
+    private fun handleServerStartFailure(message: String) {
+        android.util.Log.e("PlaybackService", "Server start failure: $message")
+        Toast.makeText(
+            this,
+            "ローカルメディアをキャストできません: $message",
+            Toast.LENGTH_LONG
+        ).show()
     }
 
     private fun switchToLocalPlayer() {
+        android.util.Log.d("PlaybackService", "switchToLocalPlayer() called")
         if (!isCastSession) return
 
         val castPlayerInstance = castPlayer ?: return
@@ -255,6 +392,9 @@ class PlaybackService : Service() {
 
         currentPlayer = exoPlayer
         isCastSession = false
+
+        // Stop local media server if it was running
+        stopLocalMediaServer()
 
         currentMediaUri?.let { uri ->
             // Determine specific mimeType from URI extension
@@ -290,6 +430,22 @@ class PlaybackService : Service() {
 
         mediaSessionConnector.setPlayer(currentPlayer)
         updateNotification()
+        android.util.Log.d("PlaybackService", "switchToLocalPlayer() completed")
+    }
+
+    private fun stopLocalMediaServer() {
+        if (isLocalServerRunning) {
+            android.util.Log.d("PlaybackService", "Stopping local media server...")
+            val intent = Intent(this, LocalMediaServerService::class.java).apply {
+                action = Constants.ACTION_STOP_SERVER
+            }
+            startService(intent)
+            isLocalServerRunning = false
+
+            // Clear SharedPreferences
+            getSharedPreferences(Constants.SERVER_SHARED_PREFS, MODE_PRIVATE)
+                .edit().clear().apply()
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -298,10 +454,31 @@ class PlaybackService : Service() {
     }
 
     override fun onDestroy() {
+        android.util.Log.d("PlaybackService", "onDestroy()")
+
+        // Unregister BroadcastReceiver
+        try {
+            unregisterReceiver(serverStateReceiver)
+        } catch (e: Exception) {
+            android.util.Log.e("PlaybackService", "Error unregistering receiver", e)
+        }
+
+        // Stop local media server
+        stopLocalMediaServer()
+
+        // Cancel coroutine scope
+        serviceScope.cancel()
+
+        // Clear SharedPreferences
+        getSharedPreferences(Constants.SERVER_SHARED_PREFS, MODE_PRIVATE)
+            .edit().clear().apply()
+
+        // Release media components
         mediaSession.release()
         mediaSessionConnector.setPlayer(null)
         exoPlayer.release()
         castPlayer?.release()
+
         super.onDestroy()
     }
 

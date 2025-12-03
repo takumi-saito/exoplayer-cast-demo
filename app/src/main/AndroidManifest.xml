@@ -54,6 +54,12 @@
             </intent-filter>
         </service>
 
+        <!-- LocalMediaServerService for Cast streaming -->
+        <service
+            android:name=".service.LocalMediaServerService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
     </application>
 
 </manifest>
