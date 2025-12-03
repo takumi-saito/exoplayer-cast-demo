@@ -588,6 +588,13 @@ class PlaybackService : Service() {
             else -> "video/mp4"
         }
 
+        // If casting, load media via RemoteMediaClient
+        if (isCastSession) {
+            android.util.Log.d("PlaybackService", "playMedia during Cast session - loading via RemoteMediaClient")
+            playMediaOnCast(mediaItem, mimeType)
+            return
+        }
+
         // Build MediaMetadata with title and artist
         val mediaMetadata = com.google.android.exoplayer2.MediaMetadata.Builder()
             .setTitle(mediaItem.title)
@@ -610,6 +617,79 @@ class PlaybackService : Service() {
         } else {
             updateNotification()
         }
+    }
+
+    private fun playMediaOnCast(mediaItem: AppMediaItem, mimeType: String) {
+        val castSession = CastContext.getSharedInstance(this).sessionManager.currentCastSession
+        val remoteMediaClient = castSession?.remoteMediaClient
+
+        if (remoteMediaClient == null) {
+            android.util.Log.e("PlaybackService", "RemoteMediaClient is null during Cast session")
+            return
+        }
+
+        // Check if this is local media
+        val isLocalMedia = mediaItem.uri.scheme == "content"
+
+        if (isLocalMedia) {
+            // For local media, need to start server and get URL
+            android.util.Log.d("PlaybackService", "Local media during Cast - starting server")
+            serviceScope.launch {
+                val serverUrl = startLocalMediaServerAsync(mediaItem.uri)
+                if (serverUrl != null) {
+                    loadMediaOnRemoteClient(remoteMediaClient, Uri.parse(serverUrl), mimeType, mediaItem, true)
+                } else {
+                    android.util.Log.e("PlaybackService", "Failed to get server URL for local media")
+                }
+            }
+        } else {
+            // Remote media - load directly
+            loadMediaOnRemoteClient(remoteMediaClient, mediaItem.uri, mimeType, mediaItem, false)
+        }
+    }
+
+    private fun loadMediaOnRemoteClient(
+        remoteMediaClient: com.google.android.gms.cast.framework.media.RemoteMediaClient,
+        uri: Uri,
+        mimeType: String,
+        mediaItem: AppMediaItem,
+        isLocalMedia: Boolean
+    ) {
+        android.util.Log.d("PlaybackService", "Loading media on RemoteMediaClient: $uri")
+
+        // Build Cast SDK MediaMetadata
+        val castMetadata = MediaMetadata(
+            if (mediaItem.type == t.saito.exoplayercastdemo.data.model.MediaType.VIDEO)
+                MediaMetadata.MEDIA_TYPE_MOVIE
+            else
+                MediaMetadata.MEDIA_TYPE_MUSIC_TRACK
+        ).apply {
+            putString(MediaMetadata.KEY_TITLE, mediaItem.title)
+            mediaItem.artist?.let { putString(MediaMetadata.KEY_ARTIST, it) }
+        }
+
+        // Build MediaInfo for Cast SDK
+        val mediaInfo = MediaInfo.Builder(uri.toString())
+            .setContentType(mimeType)
+            .setStreamType(MediaInfo.STREAM_TYPE_BUFFERED)
+            .setMetadata(castMetadata)
+            .build()
+
+        val loadRequest = MediaLoadRequestData.Builder()
+            .setMediaInfo(mediaInfo)
+            .setAutoplay(true)
+            .setCurrentTime(0L)
+            .build()
+
+        remoteMediaClient.load(loadRequest)
+            .setResultCallback { result ->
+                if (result.status.isSuccess) {
+                    android.util.Log.d("PlaybackService", "Media loaded on Cast successfully")
+                    updateNotification()
+                } else {
+                    android.util.Log.e("PlaybackService", "Failed to load media on Cast: ${result.status.statusMessage}")
+                }
+            }
     }
 
     fun pausePlayback() {
