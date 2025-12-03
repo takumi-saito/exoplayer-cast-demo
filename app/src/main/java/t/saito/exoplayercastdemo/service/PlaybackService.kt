@@ -374,7 +374,23 @@ class PlaybackService : Service() {
         }
         android.util.Log.d("PlaybackService", "Determined MIME type: $mimeType (from originalUri: $originalUri, mediaItem.type: ${currentMediaItem?.type})")
 
-        // Use RemoteMediaClient directly to avoid CastPlayer queue sync issues
+        // Check if this is local media (served from local HTTP server)
+        val isLocalMedia = castableUri.scheme == "http" && castableUri.host?.startsWith("192.168") == true
+        android.util.Log.d("PlaybackService", "isLocalMedia: $isLocalMedia, uri: $castableUri")
+
+        // Use RemoteMediaClient for ALL Cast playback to avoid CastPlayer queue sync issues
+        proceedWithCastViaRemoteMediaClient(castableUri, mimeType, currentPosition, playWhenReady, isLocalMedia)
+    }
+
+    private fun proceedWithCastViaRemoteMediaClient(
+        castableUri: Uri,
+        mimeType: String,
+        currentPosition: Long,
+        playWhenReady: Boolean,
+        isLocalMedia: Boolean
+    ) {
+        android.util.Log.d("PlaybackService", "Using RemoteMediaClient for Cast: $castableUri (isLocalMedia: $isLocalMedia)")
+
         val castSession = CastContext.getSharedInstance(this).sessionManager.currentCastSession
         val remoteMediaClient = castSession?.remoteMediaClient
 
@@ -402,11 +418,9 @@ class PlaybackService : Service() {
             .setMetadata(castMetadata)
             .build()
 
-        // Determine start position
-        val isLocalMedia = castableUri.scheme == "http" && castableUri.host?.startsWith("192.168") == true
+        // Determine start position - for local media start from beginning, for remote use current position
         val startPosition = if (isLocalMedia) 0L else currentPosition
-
-        android.util.Log.d("PlaybackService", "Loading media via RemoteMediaClient - url: $castableUri, mimeType: $mimeType, isLocalMedia: $isLocalMedia, startPosition: $startPosition")
+        android.util.Log.d("PlaybackService", "Start position: $startPosition (isLocalMedia: $isLocalMedia)")
 
         // Load media using RemoteMediaClient directly
         val loadRequest = MediaLoadRequestData.Builder()
@@ -415,25 +429,13 @@ class PlaybackService : Service() {
             .setCurrentTime(startPosition)
             .build()
 
-        // For local media, don't use CastPlayer to avoid queue sync issues
-        // Instead, let RemoteMediaClient handle playback directly
-        if (isLocalMedia) {
-            android.util.Log.d("PlaybackService", "Local media: using RemoteMediaClient directly (bypassing CastPlayer)")
-            // Don't set CastPlayer as current player to avoid status listener conflicts
-            mediaSessionConnector.setPlayer(null)
-        }
+        // Don't use CastPlayer to avoid queue sync issues
+        mediaSessionConnector.setPlayer(null)
 
         remoteMediaClient.load(loadRequest)
             .setResultCallback { result ->
                 if (result.status.isSuccess) {
                     android.util.Log.d("PlaybackService", "RemoteMediaClient.load() succeeded")
-                    if (!isLocalMedia) {
-                        // Only use CastPlayer for remote media
-                        castPlayer?.let { player ->
-                            currentPlayer = player
-                            mediaSessionConnector.setPlayer(currentPlayer)
-                        }
-                    }
                     updateNotification()
                 } else {
                     android.util.Log.e("PlaybackService", "RemoteMediaClient.load() failed: ${result.status.statusMessage}")
@@ -441,7 +443,7 @@ class PlaybackService : Service() {
                 }
             }
 
-        android.util.Log.d("PlaybackService", "proceedWithCast() - load request sent (isLocalMedia: $isLocalMedia)")
+        android.util.Log.d("PlaybackService", "RemoteMediaClient.load() request sent")
     }
 
     private fun handleServerStartFailure(message: String) {
