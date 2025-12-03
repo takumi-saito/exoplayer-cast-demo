@@ -83,6 +83,8 @@ class LocalMediaServerService : Service() {
             var port = Constants.SERVER_DEFAULT_PORT
             var started = false
 
+            Log.d(TAG, "startServer: beginning with port $port, max retries=${Constants.SERVER_MAX_PORT_RETRY}")
+
             repeat(Constants.SERVER_MAX_PORT_RETRY) { attempt ->
                 try {
                     Log.d(TAG, "Attempting to start server on port $port (attempt ${attempt + 1})")
@@ -98,15 +100,27 @@ class LocalMediaServerService : Service() {
                                 }
                             }
                             get("/health") {
+                                Log.d(TAG, "Health endpoint called")
                                 call.respondText("OK", ContentType.Text.Plain)
                             }
                         }
                     }.start(wait = false)
 
+                    Log.d(TAG, "embeddedServer.start() completed for port $port")
                     currentPort = port
-                    started = true
 
-                    Log.i(TAG, "Server started successfully on port $port")
+                    // Wait for server to be ready by health check
+                    val serverReady = waitForServerReady(port)
+                    if (!serverReady) {
+                        Log.e(TAG, "Server started but health check failed on port $port")
+                        serverInstance?.stop(1000, 2000)
+                        serverInstance = null
+                        port++
+                        return@repeat
+                    }
+
+                    started = true
+                    Log.i(TAG, "Server started and health check passed on port $port")
 
                     // 成功をBroadcast
                     saveServerState(true, port)
@@ -147,6 +161,40 @@ class LocalMediaServerService : Service() {
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping server", e)
         }
+    }
+
+    private suspend fun waitForServerReady(port: Int): Boolean {
+        // サーバー起動を少し待つ（Ktorがソケットをバインドするまで）
+        Log.d(TAG, "waitForServerReady: waiting 500ms for server initialization on port $port")
+        kotlinx.coroutines.delay(500)
+
+        repeat(15) { attempt ->
+            try {
+                // Android では localhost より 127.0.0.1 の方が信頼性が高い
+                val url = java.net.URL("http://127.0.0.1:$port/health")
+                val connection = url.openConnection() as java.net.HttpURLConnection
+                connection.connectTimeout = 300
+                connection.readTimeout = 300
+                connection.requestMethod = "GET"
+
+                val responseCode = connection.responseCode
+                Log.d(TAG, "Health check attempt ${attempt + 1}: responseCode=$responseCode")
+                if (responseCode == 200) {
+                    val response = connection.inputStream.bufferedReader().readText()
+                    Log.d(TAG, "Health check response: $response")
+                    if (response == "OK") {
+                        Log.d(TAG, "Health check passed on attempt ${attempt + 1}")
+                        connection.disconnect()
+                        return true
+                    }
+                }
+                connection.disconnect()
+            } catch (e: Exception) {
+                Log.d(TAG, "Health check attempt ${attempt + 1} failed: ${e.javaClass.simpleName}: ${e.message}")
+            }
+            kotlinx.coroutines.delay(100) // Wait 100ms before retry
+        }
+        return false
     }
 
     private fun saveServerState(isRunning: Boolean, port: Int) {

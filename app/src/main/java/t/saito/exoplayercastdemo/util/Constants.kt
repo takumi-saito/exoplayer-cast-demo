@@ -12,8 +12,8 @@ object Constants {
 
     // Local Media Server
     const val SERVER_DEFAULT_PORT = 8080
-    const val SERVER_MAX_PORT_RETRY = 5
-    const val SERVER_STARTUP_TIMEOUT_MS = 5000L
+    const val SERVER_MAX_PORT_RETRY = 3
+    const val SERVER_STARTUP_TIMEOUT_MS = 10000L
     const val SERVER_SHARED_PREFS = "local_media_server"
     const val SERVER_NOTIFICATION_ID = 2
     const val SERVER_NOTIFICATION_CHANNEL_ID = "local_media_server_channel"

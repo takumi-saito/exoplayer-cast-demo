@@ -25,6 +25,9 @@ import com.google.android.exoplayer2.Player
 import com.google.android.exoplayer2.ext.mediasession.MediaSessionConnector
 import com.google.android.exoplayer2.ext.cast.CastPlayer
 import com.google.android.exoplayer2.ext.cast.SessionAvailabilityListener
+import com.google.android.gms.cast.MediaInfo
+import com.google.android.gms.cast.MediaLoadRequestData
+import com.google.android.gms.cast.MediaMetadata
 import com.google.android.gms.cast.framework.CastContext
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CoroutineScope
@@ -108,7 +111,9 @@ class PlaybackService : Service() {
         // Initialize CastPlayer if Cast is available
         try {
             val castContext = CastContext.getSharedInstance(this)
-            castPlayer = CastPlayer(castContext).apply {
+            // Use SafeMediaItemConverter to handle null values when converting MediaInfo
+            val mediaItemConverter = t.saito.exoplayercastdemo.cast.SafeMediaItemConverter()
+            castPlayer = CastPlayer(castContext, mediaItemConverter).apply {
                 setSessionAvailabilityListener(object : SessionAvailabilityListener {
                     override fun onCastSessionAvailable() {
                         switchToCastPlayer()
@@ -230,6 +235,17 @@ class PlaybackService : Service() {
                 android.util.Log.e("PlaybackService", "[CastPlayer] onPlayerError: ${error.message}", error)
                 android.util.Log.e("PlaybackService", "[CastPlayer] Error code: ${error.errorCode}")
                 android.util.Log.e("PlaybackService", "[CastPlayer] Cause: ${error.cause}")
+
+                // Show error to user
+                Toast.makeText(
+                    this@PlaybackService,
+                    "Cast再生エラー: ${error.message ?: "不明なエラー"}",
+                    Toast.LENGTH_LONG
+                ).show()
+
+                // Fallback to local player
+                android.util.Log.d("PlaybackService", "[CastPlayer] Falling back to local player due to error")
+                switchToLocalPlayer()
             }
         }
     }
@@ -330,44 +346,102 @@ class PlaybackService : Service() {
         mediaSessionConnector.setPlayer(null)
         exoPlayer.playWhenReady = false
 
-        currentPlayer = castPlayer ?: return
         isCastSession = true
 
-        // Determine specific mimeType from URI extension
-        val uriString = castableUri.toString().lowercase()
+        // Determine MIME type from original URI or MediaItem type
+        val originalUri = currentMediaUri
         val mimeType = when {
-            uriString.endsWith(".mp4") -> "video/mp4"
-            uriString.endsWith(".mp3") -> "audio/mpeg"
-            uriString.endsWith(".m4a") -> "audio/mp4"
-            uriString.endsWith(".webm") -> "video/webm"
-            uriString.endsWith(".mkv") -> "video/x-matroska"
-            currentMediaItem?.type == t.saito.exoplayercastdemo.data.model.MediaType.VIDEO -> "video/mp4"
             currentMediaItem?.type == t.saito.exoplayercastdemo.data.model.MediaType.AUDIO -> "audio/mpeg"
+            currentMediaItem?.type == t.saito.exoplayercastdemo.data.model.MediaType.VIDEO -> "video/mp4"
+            originalUri != null -> {
+                val uriString = originalUri.toString().lowercase()
+                when {
+                    uriString.endsWith(".mp3") -> "audio/mpeg"
+                    uriString.endsWith(".m4a") -> "audio/mp4"
+                    uriString.endsWith(".aac") -> "audio/aac"
+                    uriString.endsWith(".flac") -> "audio/flac"
+                    uriString.endsWith(".wav") -> "audio/wav"
+                    uriString.endsWith(".ogg") -> "audio/ogg"
+                    uriString.endsWith(".mp4") -> "video/mp4"
+                    uriString.endsWith(".webm") -> "video/webm"
+                    uriString.endsWith(".mkv") -> "video/x-matroska"
+                    uriString.endsWith(".avi") -> "video/x-msvideo"
+                    uriString.endsWith(".mov") -> "video/quicktime"
+                    else -> MediaServerUtils.getMimeType(this, originalUri)
+                }
+            }
             else -> "video/mp4"
         }
+        android.util.Log.d("PlaybackService", "Determined MIME type: $mimeType (from originalUri: $originalUri, mediaItem.type: ${currentMediaItem?.type})")
 
-        // Build MediaMetadata with title and artist
-        val mediaMetadata = com.google.android.exoplayer2.MediaMetadata.Builder()
-            .setTitle(currentMediaItem?.title ?: "Unknown Title")
-            .setArtist(currentMediaItem?.artist)
+        // Use RemoteMediaClient directly to avoid CastPlayer queue sync issues
+        val castSession = CastContext.getSharedInstance(this).sessionManager.currentCastSession
+        val remoteMediaClient = castSession?.remoteMediaClient
+
+        if (remoteMediaClient == null) {
+            android.util.Log.e("PlaybackService", "RemoteMediaClient is null, cannot cast")
+            switchToLocalPlayer()
+            return
+        }
+
+        // Build Cast SDK MediaMetadata
+        val castMetadata = MediaMetadata(
+            if (currentMediaItem?.type == t.saito.exoplayercastdemo.data.model.MediaType.VIDEO)
+                MediaMetadata.MEDIA_TYPE_MOVIE
+            else
+                MediaMetadata.MEDIA_TYPE_MUSIC_TRACK
+        ).apply {
+            putString(MediaMetadata.KEY_TITLE, currentMediaItem?.title ?: "Unknown Title")
+            currentMediaItem?.artist?.let { putString(MediaMetadata.KEY_ARTIST, it) }
+        }
+
+        // Build MediaInfo for Cast SDK
+        val mediaInfo = MediaInfo.Builder(castableUri.toString())
+            .setContentType(mimeType)
+            .setStreamType(MediaInfo.STREAM_TYPE_BUFFERED)
+            .setMetadata(castMetadata)
             .build()
 
-        val mediaItem = MediaItem.Builder()
-            .setUri(castableUri)
-            .setMimeType(mimeType)
-            .setMediaMetadata(mediaMetadata)
+        // Determine start position
+        val isLocalMedia = castableUri.scheme == "http" && castableUri.host?.startsWith("192.168") == true
+        val startPosition = if (isLocalMedia) 0L else currentPosition
+
+        android.util.Log.d("PlaybackService", "Loading media via RemoteMediaClient - url: $castableUri, mimeType: $mimeType, isLocalMedia: $isLocalMedia, startPosition: $startPosition")
+
+        // Load media using RemoteMediaClient directly
+        val loadRequest = MediaLoadRequestData.Builder()
+            .setMediaInfo(mediaInfo)
+            .setAutoplay(playWhenReady)
+            .setCurrentTime(startPosition)
             .build()
 
-        android.util.Log.d("PlaybackService", "Setting media item on CastPlayer - title: ${currentMediaItem?.title}, mimeType: $mimeType, uri: $castableUri")
-        castPlayer?.setMediaItem(mediaItem)
-        castPlayer?.seekTo(currentPosition)
-        castPlayer?.playWhenReady = playWhenReady
-        castPlayer?.prepare()
-        android.util.Log.d("PlaybackService", "CastPlayer prepared and ready to play")
+        // For local media, don't use CastPlayer to avoid queue sync issues
+        // Instead, let RemoteMediaClient handle playback directly
+        if (isLocalMedia) {
+            android.util.Log.d("PlaybackService", "Local media: using RemoteMediaClient directly (bypassing CastPlayer)")
+            // Don't set CastPlayer as current player to avoid status listener conflicts
+            mediaSessionConnector.setPlayer(null)
+        }
 
-        mediaSessionConnector.setPlayer(currentPlayer)
-        updateNotification()
-        android.util.Log.d("PlaybackService", "proceedWithCast() completed successfully")
+        remoteMediaClient.load(loadRequest)
+            .setResultCallback { result ->
+                if (result.status.isSuccess) {
+                    android.util.Log.d("PlaybackService", "RemoteMediaClient.load() succeeded")
+                    if (!isLocalMedia) {
+                        // Only use CastPlayer for remote media
+                        castPlayer?.let { player ->
+                            currentPlayer = player
+                            mediaSessionConnector.setPlayer(currentPlayer)
+                        }
+                    }
+                    updateNotification()
+                } else {
+                    android.util.Log.e("PlaybackService", "RemoteMediaClient.load() failed: ${result.status.statusMessage}")
+                    switchToLocalPlayer()
+                }
+            }
+
+        android.util.Log.d("PlaybackService", "proceedWithCast() - load request sent (isLocalMedia: $isLocalMedia)")
     }
 
     private fun handleServerStartFailure(message: String) {

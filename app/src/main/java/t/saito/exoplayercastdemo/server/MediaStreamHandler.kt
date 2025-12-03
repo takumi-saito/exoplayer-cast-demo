@@ -9,9 +9,11 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.response.header
 import io.ktor.server.response.respond
-import io.ktor.server.response.respondOutputStream
+import io.ktor.server.response.respondBytesWriter
+import io.ktor.utils.io.writeFully
 import t.saito.exoplayercastdemo.util.MediaServerUtils
 import java.io.FileNotFoundException
+import java.io.IOException
 
 object MediaStreamHandler {
     private const val TAG = "MediaStreamHandler"
@@ -60,9 +62,15 @@ object MediaStreamHandler {
         } catch (e: FileNotFoundException) {
             Log.e(TAG, "File not found: $contentUri", e)
             call.respond(HttpStatusCode.NotFound, "Media not found")
+        } catch (e: IOException) {
+            // Broken pipe は Cast デバイスが接続を閉じた場合に発生する（正常）
+            if (e.message?.contains("Broken pipe") == true || e.message?.contains("Connection reset") == true) {
+                Log.d(TAG, "Client closed connection (normal for Cast devices): ${e.message}")
+            } else {
+                Log.e(TAG, "IO error streaming media: $contentUri", e)
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error streaming media: $contentUri", e)
-            call.respond(HttpStatusCode.InternalServerError, "Error streaming media: ${e.message}")
         }
     }
 
@@ -96,38 +104,59 @@ object MediaStreamHandler {
         val contentLength = end - start + 1
         Log.d(TAG, "Range request: $start-$end/$fileSize (contentLength=$contentLength)")
 
-        call.response.status(HttpStatusCode.PartialContent)
-        call.response.header(HttpHeaders.ContentType, mimeType)
-        call.response.header(HttpHeaders.ContentLength, contentLength.toString())
-        call.response.header(HttpHeaders.AcceptRanges, "bytes")
-        call.response.header(HttpHeaders.ContentRange, "bytes $start-$end/$fileSize")
-
         // AssetFileDescriptorでシーク対応のストリーム取得
-        context.contentResolver.openAssetFileDescriptor(contentUri, "r")?.use { afd ->
-            afd.createInputStream().use { inputStream ->
+        val afd = context.contentResolver.openAssetFileDescriptor(contentUri, "r")
+        if (afd == null) {
+            Log.e(TAG, "Cannot open AssetFileDescriptor for: $contentUri")
+            call.respond(HttpStatusCode.InternalServerError, "Cannot open file")
+            return
+        }
+
+        try {
+            val inputStream = afd.createInputStream()
+            try {
                 // 開始位置までスキップ
                 var skipped = 0L
                 while (skipped < start) {
-                    val s = inputStream.skip(start - skipped)
-                    if (s <= 0) break
-                    skipped += s
+                    val toSkip = start - skipped
+                    val s = inputStream.skip(toSkip)
+                    if (s <= 0) {
+                        val readByte = inputStream.read()
+                        if (readByte == -1) {
+                            Log.e(TAG, "EOF reached while skipping: skipped=$skipped, target=$start")
+                            call.respond(HttpStatusCode.InternalServerError, "Failed to seek")
+                            return
+                        }
+                        skipped++
+                    } else {
+                        skipped += s
+                    }
                 }
 
-                call.respondOutputStream(ContentType.parse(mimeType)) {
+                Log.d(TAG, "Successfully skipped to position $start")
+
+                // ヘッダーを設定してストリーミング
+                call.response.status(HttpStatusCode.PartialContent)
+                call.response.header(HttpHeaders.AcceptRanges, "bytes")
+                call.response.header(HttpHeaders.ContentRange, "bytes $start-$end/$fileSize")
+                call.response.header(HttpHeaders.ContentLength, contentLength.toString())
+
+                call.respondBytesWriter(contentType = ContentType.parse(mimeType)) {
                     val buffer = ByteArray(8192)
                     var remaining = contentLength
                     while (remaining > 0) {
                         val toRead = minOf(buffer.size.toLong(), remaining).toInt()
                         val read = inputStream.read(buffer, 0, toRead)
                         if (read == -1) break
-                        write(buffer, 0, read)
+                        writeFully(buffer, 0, read)
                         remaining -= read
                     }
                 }
+            } finally {
+                inputStream.close()
             }
-        } ?: run {
-            Log.e(TAG, "Cannot open AssetFileDescriptor for: $contentUri")
-            call.respond(HttpStatusCode.InternalServerError, "Cannot open file")
+        } finally {
+            afd.close()
         }
     }
 
@@ -140,17 +169,26 @@ object MediaStreamHandler {
     ) {
         Log.d(TAG, "Full request: fileSize=$fileSize, mimeType=$mimeType")
 
-        call.response.header(HttpHeaders.ContentType, mimeType)
-        call.response.header(HttpHeaders.ContentLength, fileSize.toString())
-        call.response.header(HttpHeaders.AcceptRanges, "bytes")
-
-        context.contentResolver.openInputStream(contentUri)?.use { inputStream ->
-            call.respondOutputStream(ContentType.parse(mimeType)) {
-                inputStream.copyTo(this, bufferSize = 8192)
-            }
-        } ?: run {
+        val inputStream = context.contentResolver.openInputStream(contentUri)
+        if (inputStream == null) {
             Log.e(TAG, "Cannot open InputStream for: $contentUri")
             call.respond(HttpStatusCode.NotFound, "Media not found")
+            return
+        }
+
+        try {
+            call.response.header(HttpHeaders.AcceptRanges, "bytes")
+            call.response.header(HttpHeaders.ContentLength, fileSize.toString())
+
+            call.respondBytesWriter(contentType = ContentType.parse(mimeType)) {
+                val buffer = ByteArray(8192)
+                var read: Int
+                while (inputStream.read(buffer).also { read = it } != -1) {
+                    writeFully(buffer, 0, read)
+                }
+            }
+        } finally {
+            inputStream.close()
         }
     }
 
