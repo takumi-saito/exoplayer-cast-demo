@@ -84,16 +84,25 @@ class PlaybackService : Service() {
         }
 
         // Add player listener
-        exoPlayer.addListener(createPlayerListener())
-        castPlayer?.addListener(createPlayerListener())
+        exoPlayer.addListener(createPlayerListener("ExoPlayer"))
+        castPlayer?.addListener(createCastPlayerListener())
 
         // Create notification channel
         createNotificationChannel()
     }
 
-    private fun createPlayerListener(): Player.Listener {
+    private fun createPlayerListener(tag: String): Player.Listener {
         return object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
+                val stateString = when (playbackState) {
+                    Player.STATE_IDLE -> "IDLE"
+                    Player.STATE_BUFFERING -> "BUFFERING"
+                    Player.STATE_READY -> "READY"
+                    Player.STATE_ENDED -> "ENDED"
+                    else -> "UNKNOWN"
+                }
+                android.util.Log.d("PlaybackService", "[$tag] onPlaybackStateChanged: $stateString")
+
                 when (playbackState) {
                     Player.STATE_READY -> {
                         if (currentPlayer.playWhenReady) {
@@ -108,16 +117,86 @@ class PlaybackService : Service() {
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
+                android.util.Log.d("PlaybackService", "[$tag] onIsPlayingChanged: $isPlaying")
                 updateNotification()
+            }
+
+            override fun onPlayerError(error: com.google.android.exoplayer2.PlaybackException) {
+                android.util.Log.e("PlaybackService", "[$tag] onPlayerError: ${error.message}", error)
+                android.util.Log.e("PlaybackService", "[$tag] Error code: ${error.errorCode}")
+            }
+        }
+    }
+
+    private fun createCastPlayerListener(): Player.Listener {
+        return object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                val stateString = when (playbackState) {
+                    Player.STATE_IDLE -> "IDLE"
+                    Player.STATE_BUFFERING -> "BUFFERING"
+                    Player.STATE_READY -> "READY"
+                    Player.STATE_ENDED -> "ENDED"
+                    else -> "UNKNOWN"
+                }
+                android.util.Log.d("PlaybackService", "[CastPlayer] onPlaybackStateChanged: $stateString")
+
+                when (playbackState) {
+                    Player.STATE_IDLE -> {
+                        android.util.Log.w("PlaybackService", "[CastPlayer] Player is IDLE - may indicate an error or no media loaded")
+                    }
+                    Player.STATE_READY -> {
+                        android.util.Log.d("PlaybackService", "[CastPlayer] Player is READY - playWhenReady: ${castPlayer?.playWhenReady}")
+                        if (currentPlayer.playWhenReady) {
+                            updateNotification()
+                        }
+                    }
+                    Player.STATE_ENDED -> {
+                        android.util.Log.d("PlaybackService", "[CastPlayer] Playback ENDED")
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        isForegroundService = false
+                    }
+                }
+            }
+
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                android.util.Log.d("PlaybackService", "[CastPlayer] onIsPlayingChanged: $isPlaying")
+                updateNotification()
+            }
+
+            override fun onPlayerError(error: com.google.android.exoplayer2.PlaybackException) {
+                android.util.Log.e("PlaybackService", "[CastPlayer] onPlayerError: ${error.message}", error)
+                android.util.Log.e("PlaybackService", "[CastPlayer] Error code: ${error.errorCode}")
+                android.util.Log.e("PlaybackService", "[CastPlayer] Cause: ${error.cause}")
             }
         }
     }
 
     private fun switchToCastPlayer() {
-        if (isCastSession) return
+        android.util.Log.d("PlaybackService", "switchToCastPlayer() called")
+        if (isCastSession) {
+            android.util.Log.w("PlaybackService", "Already in cast session")
+            return
+        }
+
+        // Check if current media is castable (http or https only)
+        currentMediaUri?.let { uri ->
+            android.util.Log.d("PlaybackService", "Current media URI: $uri")
+            val scheme = uri.scheme?.lowercase()
+            android.util.Log.d("PlaybackService", "URI scheme: $scheme")
+            if (scheme != "http" && scheme != "https") {
+                // Cannot cast local media, stay on local player
+                android.util.Log.w("PlaybackService", "Cannot cast local media with scheme: $scheme")
+                return
+            }
+        } ?: run {
+            // No media to cast
+            android.util.Log.w("PlaybackService", "No media to cast - currentMediaUri is null")
+            return
+        }
 
         val currentPosition = exoPlayer.currentPosition
         val playWhenReady = exoPlayer.playWhenReady
+        android.util.Log.d("PlaybackService", "Switching to cast player - position: $currentPosition, playWhenReady: $playWhenReady")
 
         mediaSessionConnector.setPlayer(null)
         exoPlayer.playWhenReady = false
@@ -126,26 +205,42 @@ class PlaybackService : Service() {
         isCastSession = true
 
         currentMediaUri?.let { uri ->
-            // Determine mimeType based on media type
-            val mimeType = when (currentMediaItem?.type) {
-                t.saito.exoplayercastdemo.data.model.MediaType.VIDEO -> "video/*"
-                t.saito.exoplayercastdemo.data.model.MediaType.AUDIO -> "audio/*"
-                null -> "video/*"
+            // Determine specific mimeType from URI extension
+            val uriString = uri.toString().lowercase()
+            val mimeType = when {
+                uriString.endsWith(".mp4") -> "video/mp4"
+                uriString.endsWith(".mp3") -> "audio/mpeg"
+                uriString.endsWith(".m4a") -> "audio/mp4"
+                uriString.endsWith(".webm") -> "video/webm"
+                uriString.endsWith(".mkv") -> "video/x-matroska"
+                currentMediaItem?.type == t.saito.exoplayercastdemo.data.model.MediaType.VIDEO -> "video/mp4"
+                currentMediaItem?.type == t.saito.exoplayercastdemo.data.model.MediaType.AUDIO -> "audio/mpeg"
+                else -> "video/mp4"
             }
+
+            // Build MediaMetadata with title and artist
+            val mediaMetadata = com.google.android.exoplayer2.MediaMetadata.Builder()
+                .setTitle(currentMediaItem?.title ?: "Unknown Title")
+                .setArtist(currentMediaItem?.artist)
+                .build()
 
             val mediaItem = MediaItem.Builder()
                 .setUri(uri)
                 .setMimeType(mimeType)
+                .setMediaMetadata(mediaMetadata)
                 .build()
 
+            android.util.Log.d("PlaybackService", "Setting media item on CastPlayer - title: ${currentMediaItem?.title}, mimeType: $mimeType")
             castPlayer?.setMediaItem(mediaItem)
             castPlayer?.seekTo(currentPosition)
             castPlayer?.playWhenReady = playWhenReady
             castPlayer?.prepare()
+            android.util.Log.d("PlaybackService", "CastPlayer prepared and ready to play")
         }
 
         mediaSessionConnector.setPlayer(currentPlayer)
         updateNotification()
+        android.util.Log.d("PlaybackService", "switchToCastPlayer() completed successfully")
     }
 
     private fun switchToLocalPlayer() {
@@ -162,16 +257,29 @@ class PlaybackService : Service() {
         isCastSession = false
 
         currentMediaUri?.let { uri ->
-            // Determine mimeType based on media type
-            val mimeType = when (currentMediaItem?.type) {
-                t.saito.exoplayercastdemo.data.model.MediaType.VIDEO -> "video/*"
-                t.saito.exoplayercastdemo.data.model.MediaType.AUDIO -> "audio/*"
-                null -> "video/*"
+            // Determine specific mimeType from URI extension
+            val uriString = uri.toString().lowercase()
+            val mimeType = when {
+                uriString.endsWith(".mp4") -> "video/mp4"
+                uriString.endsWith(".mp3") -> "audio/mpeg"
+                uriString.endsWith(".m4a") -> "audio/mp4"
+                uriString.endsWith(".webm") -> "video/webm"
+                uriString.endsWith(".mkv") -> "video/x-matroska"
+                currentMediaItem?.type == t.saito.exoplayercastdemo.data.model.MediaType.VIDEO -> "video/mp4"
+                currentMediaItem?.type == t.saito.exoplayercastdemo.data.model.MediaType.AUDIO -> "audio/mpeg"
+                else -> "video/mp4"
             }
+
+            // Build MediaMetadata with title and artist
+            val mediaMetadata = com.google.android.exoplayer2.MediaMetadata.Builder()
+                .setTitle(currentMediaItem?.title ?: "Unknown Title")
+                .setArtist(currentMediaItem?.artist)
+                .build()
 
             val mediaItem = MediaItem.Builder()
                 .setUri(uri)
                 .setMimeType(mimeType)
+                .setMediaMetadata(mediaMetadata)
                 .build()
 
             exoPlayer.setMediaItem(mediaItem)
@@ -213,7 +321,32 @@ class PlaybackService : Service() {
     fun playMedia(mediaItem: AppMediaItem) {
         currentMediaItem = mediaItem
         currentMediaUri = mediaItem.uri
-        val exoMediaItem = MediaItem.fromUri(mediaItem.uri)
+
+        // Determine specific mimeType from URI extension
+        val uriString = mediaItem.uri.toString().lowercase()
+        val mimeType = when {
+            uriString.endsWith(".mp4") -> "video/mp4"
+            uriString.endsWith(".mp3") -> "audio/mpeg"
+            uriString.endsWith(".m4a") -> "audio/mp4"
+            uriString.endsWith(".webm") -> "video/webm"
+            uriString.endsWith(".mkv") -> "video/x-matroska"
+            mediaItem.type == t.saito.exoplayercastdemo.data.model.MediaType.VIDEO -> "video/mp4"
+            mediaItem.type == t.saito.exoplayercastdemo.data.model.MediaType.AUDIO -> "audio/mpeg"
+            else -> "video/mp4"
+        }
+
+        // Build MediaMetadata with title and artist
+        val mediaMetadata = com.google.android.exoplayer2.MediaMetadata.Builder()
+            .setTitle(mediaItem.title)
+            .setArtist(mediaItem.artist)
+            .build()
+
+        val exoMediaItem = MediaItem.Builder()
+            .setUri(mediaItem.uri)
+            .setMimeType(mimeType)
+            .setMediaMetadata(mediaMetadata)
+            .build()
+
         currentPlayer.setMediaItem(exoMediaItem)
         currentPlayer.prepare()
         currentPlayer.play()
