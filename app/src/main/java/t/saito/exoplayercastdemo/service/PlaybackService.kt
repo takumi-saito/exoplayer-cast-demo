@@ -126,7 +126,18 @@ class PlaybackService : Service() {
         isCastSession = true
 
         currentMediaUri?.let { uri ->
-            val mediaItem = MediaItem.fromUri(uri)
+            // Determine mimeType based on media type
+            val mimeType = when (currentMediaItem?.type) {
+                t.saito.exoplayercastdemo.data.model.MediaType.VIDEO -> "video/*"
+                t.saito.exoplayercastdemo.data.model.MediaType.AUDIO -> "audio/*"
+                null -> "video/*"
+            }
+
+            val mediaItem = MediaItem.Builder()
+                .setUri(uri)
+                .setMimeType(mimeType)
+                .build()
+
             castPlayer?.setMediaItem(mediaItem)
             castPlayer?.seekTo(currentPosition)
             castPlayer?.playWhenReady = playWhenReady
@@ -151,7 +162,18 @@ class PlaybackService : Service() {
         isCastSession = false
 
         currentMediaUri?.let { uri ->
-            val mediaItem = MediaItem.fromUri(uri)
+            // Determine mimeType based on media type
+            val mimeType = when (currentMediaItem?.type) {
+                t.saito.exoplayercastdemo.data.model.MediaType.VIDEO -> "video/*"
+                t.saito.exoplayercastdemo.data.model.MediaType.AUDIO -> "audio/*"
+                null -> "video/*"
+            }
+
+            val mediaItem = MediaItem.Builder()
+                .setUri(uri)
+                .setMimeType(mimeType)
+                .build()
+
             exoPlayer.setMediaItem(mediaItem)
             exoPlayer.seekTo(currentPosition)
             exoPlayer.playWhenReady = playWhenReady
