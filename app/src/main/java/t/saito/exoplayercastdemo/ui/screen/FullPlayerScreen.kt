@@ -1,5 +1,6 @@
 package t.saito.exoplayercastdemo.ui.screen
 
+import android.view.View
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,6 +39,7 @@ fun FullPlayerScreen(
     playerViewModel: PlayerViewModel,
     serviceConnection: PlaybackServiceConnection,
     onNavigateBack: () -> Unit,
+    onCastButtonCreated: (View) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val currentMedia by playerViewModel.currentMedia.collectAsState()
@@ -68,6 +70,7 @@ fun FullPlayerScreen(
                 },
                 actions = {
                     CastButton(
+                        onViewCreated = onCastButtonCreated,
                         modifier = Modifier.padding(end = 8.dp)
                     )
                 }

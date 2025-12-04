@@ -1,6 +1,7 @@
 package t.saito.exoplayercastdemo.ui.component
 
 import android.view.ContextThemeWrapper
+import android.view.View
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
@@ -9,6 +10,7 @@ import com.google.android.gms.cast.framework.CastButtonFactory
 
 @Composable
 fun CastButton(
+    onViewCreated: (View) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     AndroidView(
@@ -22,6 +24,7 @@ fun CastButton(
 
             MediaRouteButton(themedContext).apply {
                 CastButtonFactory.setUpMediaRouteButton(themedContext, this)
+                onViewCreated(this)
             }
         },
         modifier = modifier

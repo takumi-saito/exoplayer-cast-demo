@@ -2,10 +2,14 @@ package t.saito.exoplayercastdemo.ui.component
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
@@ -25,6 +29,7 @@ import t.saito.exoplayercastdemo.data.model.PlaybackState
 fun MiniPlayer(
     currentMedia: MediaItem?,
     playbackState: PlaybackState,
+    isCasting: Boolean = false,
     onTogglePlayPause: () -> Unit,
     onExpand: () -> Unit,
     modifier: Modifier = Modifier
@@ -42,6 +47,17 @@ fun MiniPlayer(
             modifier = Modifier.padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // Cast中はCastアイコンを表示
+            if (isCasting) {
+                Icon(
+                    imageVector = Icons.Default.Cast,
+                    contentDescription = "Casting",
+                    modifier = Modifier.size(24.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+            }
+
             Text(
                 text = currentMedia.title,
                 modifier = Modifier.weight(1f),

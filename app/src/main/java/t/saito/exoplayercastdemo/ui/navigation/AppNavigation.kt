@@ -1,5 +1,6 @@
 package t.saito.exoplayercastdemo.ui.navigation
 
+import android.view.View
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.navigation.compose.NavHost
@@ -21,6 +22,7 @@ fun AppNavigation(
     mediaViewModel: MediaViewModel,
     playerViewModel: PlayerViewModel,
     serviceConnection: PlaybackServiceConnection,
+    onCastButtonCreated: (View) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val navController = rememberNavController()
@@ -46,7 +48,8 @@ fun AppNavigation(
                 serviceConnection = serviceConnection,
                 onNavigateBack = {
                     navController.popBackStack()
-                }
+                },
+                onCastButtonCreated = onCastButtonCreated
             )
         }
     }

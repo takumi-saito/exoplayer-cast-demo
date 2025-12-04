@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">ExoPlayerCastDemo</string>
+    <string name="cast_menu_title">Cast</string>
+    <string name="introducing_cast">タップしてCastデバイスに接続</string>
 </resources>

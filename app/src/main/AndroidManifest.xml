@@ -45,6 +45,27 @@
             </intent-filter>
         </activity>
 
+        <!-- Expanded Controller Activity for Cast -->
+        <activity
+            android:name=".expandedcontrols.ExpandedControlsActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:launchMode="singleTask"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.CastVideosDark">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+            </intent-filter>
+            <meta-data
+                android:name="android.support.PARENT_ACTIVITY"
+                android:value=".MainActivity" />
+        </activity>
+
+        <!-- MediaTransferReceiver for Cast system integration -->
+        <receiver
+            android:name="androidx.mediarouter.media.MediaTransferReceiver"
+            android:exported="true" />
+
         <!-- PlaybackService -->
         <service
             android:name=".service.PlaybackService"
