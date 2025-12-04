@@ -8,5 +8,6 @@ data class MediaItem(
     val artist: String? = null,
     val uri: Uri,
     val duration: Long = 0L,
-    val type: MediaType
+    val type: MediaType,
+    val thumbnailUri: Uri? = null  // サムネイル画像URI（Cast時に表示）
 )

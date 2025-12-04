@@ -1,7 +1,6 @@
 package t.saito.exoplayercastdemo.viewmodel
 
 import android.app.Application
-import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.android.exoplayer2.Player
@@ -16,6 +15,7 @@ import t.saito.exoplayercastdemo.data.model.MediaItem
 import t.saito.exoplayercastdemo.data.model.PlaybackState
 import t.saito.exoplayercastdemo.service.PlaybackService
 import t.saito.exoplayercastdemo.service.PlaybackServiceConnection
+import t.saito.exoplayercastdemo.service.QueueManager
 
 class PlayerViewModel(application: Application) : AndroidViewModel(application) {
     private val serviceConnection = PlaybackServiceConnection(application)
@@ -35,6 +35,19 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     private val _isCasting = MutableStateFlow(false)
     val isCasting: StateFlow<Boolean> = _isCasting.asStateFlow()
 
+    // キュー関連
+    private val _queue = MutableStateFlow<List<MediaItem>>(emptyList())
+    val queue: StateFlow<List<MediaItem>> = _queue.asStateFlow()
+
+    private val _currentQueueIndex = MutableStateFlow(-1)
+    val currentQueueIndex: StateFlow<Int> = _currentQueueIndex.asStateFlow()
+
+    private val _repeatMode = MutableStateFlow(QueueManager.RepeatMode.OFF)
+    val repeatMode: StateFlow<QueueManager.RepeatMode> = _repeatMode.asStateFlow()
+
+    private val _shuffleEnabled = MutableStateFlow(false)
+    val shuffleEnabled: StateFlow<Boolean> = _shuffleEnabled.asStateFlow()
+
     private var positionUpdateJob: Job? = null
     private var playerListener: Player.Listener? = null
 
@@ -45,7 +58,31 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 service?.let {
                     restorePlaybackState(it)
                     setupPlayerListener(it.getPlayer())
+                    setupQueueObservers(it)
                 }
+            }
+        }
+    }
+
+    private fun setupQueueObservers(service: PlaybackService) {
+        viewModelScope.launch {
+            service.queueManager.queue.collect { queueList ->
+                _queue.value = queueList
+            }
+        }
+        viewModelScope.launch {
+            service.queueManager.currentIndex.collect { index ->
+                _currentQueueIndex.value = index
+            }
+        }
+        viewModelScope.launch {
+            service.queueManager.repeatMode.collect { mode ->
+                _repeatMode.value = mode
+            }
+        }
+        viewModelScope.launch {
+            service.queueManager.shuffleEnabled.collect { enabled ->
+                _shuffleEnabled.value = enabled
             }
         }
     }
@@ -145,6 +182,71 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     fun seekTo(position: Long) {
         serviceConnection.service.value?.getPlayer()?.seekTo(position)
         _currentPosition.value = position
+    }
+
+    // キュー操作メソッド
+
+    /**
+     * キューに追加
+     */
+    fun addToQueue(mediaItem: MediaItem) {
+        serviceConnection.service.value?.addToQueue(mediaItem)
+    }
+
+    /**
+     * キューをセットして再生開始
+     */
+    fun playQueue(items: List<MediaItem>, startIndex: Int = 0) {
+        serviceConnection.service.value?.playQueue(items, startIndex)
+    }
+
+    /**
+     * 次の曲へ
+     */
+    fun skipToNext(): Boolean {
+        return serviceConnection.service.value?.skipToNext() ?: false
+    }
+
+    /**
+     * 前の曲へ
+     */
+    fun skipToPrevious(): Boolean {
+        return serviceConnection.service.value?.skipToPrevious() ?: false
+    }
+
+    /**
+     * キュー内の特定のインデックスにスキップ
+     */
+    fun skipToQueueItem(index: Int): Boolean {
+        return serviceConnection.service.value?.skipToQueueItem(index) ?: false
+    }
+
+    /**
+     * リピートモードをトグル
+     */
+    fun toggleRepeatMode(): QueueManager.RepeatMode {
+        return serviceConnection.service.value?.toggleRepeatMode() ?: QueueManager.RepeatMode.OFF
+    }
+
+    /**
+     * シャッフルをトグル
+     */
+    fun toggleShuffle(): Boolean {
+        return serviceConnection.service.value?.toggleShuffle() ?: false
+    }
+
+    /**
+     * 次の曲があるか
+     */
+    fun hasNext(): Boolean {
+        return serviceConnection.service.value?.queueManager?.hasNext() ?: false
+    }
+
+    /**
+     * 前の曲があるか
+     */
+    fun hasPrevious(): Boolean {
+        return serviceConnection.service.value?.queueManager?.hasPrevious() ?: false
     }
 
     private fun startPositionUpdate() {

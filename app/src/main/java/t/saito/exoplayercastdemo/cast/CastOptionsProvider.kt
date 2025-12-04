@@ -29,6 +29,7 @@ class CastOptionsProvider : OptionsProvider {
             .setReceiverApplicationId("CC1AD845") // Default Media Receiver
             .setLaunchOptions(launchOptions)
             .setCastMediaOptions(mediaOptions)
+            .setRemoteToLocalEnabled(true) // キャストバック対応（Castからローカルへの転送）
             .build()
     }
 

@@ -49,6 +49,12 @@ fun FullPlayerScreen(
     val isCasting by playerViewModel.isCasting.collectAsState()
     val service by serviceConnection.service.collectAsState()
 
+    // キュー関連
+    val queue by playerViewModel.queue.collectAsState()
+    val repeatMode by playerViewModel.repeatMode.collectAsState()
+    val shuffleEnabled by playerViewModel.shuffleEnabled.collectAsState()
+    val hasQueue = queue.isNotEmpty()
+
     Scaffold(
         modifier = modifier.fillMaxSize(),
         topBar = {
@@ -162,6 +168,16 @@ fun FullPlayerScreen(
                         onPlayPauseClick = { playerViewModel.togglePlayPause() },
                         onStopClick = { playerViewModel.stop() },
                         onSeek = { position -> playerViewModel.seekTo(position) },
+                        // キュー関連
+                        hasQueue = hasQueue,
+                        hasNext = playerViewModel.hasNext(),
+                        hasPrevious = playerViewModel.hasPrevious(),
+                        repeatMode = repeatMode,
+                        shuffleEnabled = shuffleEnabled,
+                        onSkipNext = { playerViewModel.skipToNext() },
+                        onSkipPrevious = { playerViewModel.skipToPrevious() },
+                        onToggleRepeat = { playerViewModel.toggleRepeatMode() },
+                        onToggleShuffle = { playerViewModel.toggleShuffle() },
                         modifier = Modifier.padding(16.dp)
                     )
                 }

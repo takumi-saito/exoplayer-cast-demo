@@ -28,7 +28,9 @@ import com.google.android.exoplayer2.ext.cast.SessionAvailabilityListener
 import com.google.android.gms.cast.MediaInfo
 import com.google.android.gms.cast.MediaLoadRequestData
 import com.google.android.gms.cast.MediaMetadata
+import com.google.android.gms.cast.MediaQueueItem
 import com.google.android.gms.cast.framework.CastContext
+import com.google.android.gms.common.images.WebImage
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -52,6 +54,9 @@ class PlaybackService : Service() {
     private lateinit var mediaSession: MediaSessionCompat
     private lateinit var mediaSessionConnector: MediaSessionConnector
     private val binder = PlaybackServiceBinder()
+
+    // キューマネージャー
+    val queueManager = QueueManager()
 
     private var isForegroundService = false
     private var currentMediaUri: Uri? = null
@@ -400,7 +405,7 @@ class PlaybackService : Service() {
             return
         }
 
-        // Build Cast SDK MediaMetadata
+        // Build Cast SDK MediaMetadata with thumbnail
         val castMetadata = MediaMetadata(
             if (currentMediaItem?.type == t.saito.exoplayercastdemo.data.model.MediaType.VIDEO)
                 MediaMetadata.MEDIA_TYPE_MOVIE
@@ -409,6 +414,10 @@ class PlaybackService : Service() {
         ).apply {
             putString(MediaMetadata.KEY_TITLE, currentMediaItem?.title ?: "Unknown Title")
             currentMediaItem?.artist?.let { putString(MediaMetadata.KEY_ARTIST, it) }
+            // サムネイル画像を追加
+            currentMediaItem?.thumbnailUri?.let { thumbnailUri ->
+                addImage(WebImage(thumbnailUri))
+            }
         }
 
         // Build MediaInfo for Cast SDK
@@ -657,7 +666,7 @@ class PlaybackService : Service() {
     ) {
         android.util.Log.d("PlaybackService", "Loading media on RemoteMediaClient: $uri")
 
-        // Build Cast SDK MediaMetadata
+        // Build Cast SDK MediaMetadata with thumbnail
         val castMetadata = MediaMetadata(
             if (mediaItem.type == t.saito.exoplayercastdemo.data.model.MediaType.VIDEO)
                 MediaMetadata.MEDIA_TYPE_MOVIE
@@ -666,6 +675,10 @@ class PlaybackService : Service() {
         ).apply {
             putString(MediaMetadata.KEY_TITLE, mediaItem.title)
             mediaItem.artist?.let { putString(MediaMetadata.KEY_ARTIST, it) }
+            // サムネイル画像を追加
+            mediaItem.thumbnailUri?.let { thumbnailUri ->
+                addImage(WebImage(thumbnailUri))
+            }
         }
 
         // Build MediaInfo for Cast SDK
@@ -706,6 +719,76 @@ class PlaybackService : Service() {
         currentPlayer.stop()
         stopForeground(STOP_FOREGROUND_REMOVE)
         isForegroundService = false
+    }
+
+    // キュー操作メソッド
+
+    /**
+     * キューに追加
+     */
+    fun addToQueue(mediaItem: AppMediaItem) {
+        queueManager.addToQueue(mediaItem)
+    }
+
+    /**
+     * キューをセットして再生開始
+     */
+    fun playQueue(items: List<AppMediaItem>, startIndex: Int = 0) {
+        queueManager.setQueue(items, startIndex)
+        queueManager.getCurrentItem()?.let { playMedia(it) }
+    }
+
+    /**
+     * 次の曲へ
+     */
+    fun skipToNext(): Boolean {
+        val nextItem = queueManager.skipToNext()
+        return if (nextItem != null) {
+            playMedia(nextItem)
+            true
+        } else {
+            false
+        }
+    }
+
+    /**
+     * 前の曲へ
+     */
+    fun skipToPrevious(): Boolean {
+        val prevItem = queueManager.skipToPrevious()
+        return if (prevItem != null) {
+            playMedia(prevItem)
+            true
+        } else {
+            false
+        }
+    }
+
+    /**
+     * キュー内の特定のインデックスにスキップ
+     */
+    fun skipToQueueItem(index: Int): Boolean {
+        val item = queueManager.skipToIndex(index)
+        return if (item != null) {
+            playMedia(item)
+            true
+        } else {
+            false
+        }
+    }
+
+    /**
+     * リピートモードをトグル
+     */
+    fun toggleRepeatMode(): QueueManager.RepeatMode {
+        return queueManager.toggleRepeatMode()
+    }
+
+    /**
+     * シャッフルをトグル
+     */
+    fun toggleShuffle(): Boolean {
+        return queueManager.toggleShuffle()
     }
 
     private fun createNotificationChannel() {
