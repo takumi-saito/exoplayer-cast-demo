@@ -197,6 +197,10 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
      * キューをセットして再生開始
      */
     fun playQueue(items: List<MediaItem>, startIndex: Int = 0) {
+        // 選択されたメディアを現在のメディアとして設定
+        if (startIndex in items.indices) {
+            _currentMedia.value = items[startIndex]
+        }
         serviceConnection.service.value?.playQueue(items, startIndex)
     }
 
@@ -204,21 +208,36 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
      * 次の曲へ
      */
     fun skipToNext(): Boolean {
-        return serviceConnection.service.value?.skipToNext() ?: false
+        val result = serviceConnection.service.value?.skipToNext() ?: false
+        if (result) {
+            // 現在のメディアを更新
+            _currentMedia.value = serviceConnection.service.value?.getCurrentMediaItem()
+        }
+        return result
     }
 
     /**
      * 前の曲へ
      */
     fun skipToPrevious(): Boolean {
-        return serviceConnection.service.value?.skipToPrevious() ?: false
+        val result = serviceConnection.service.value?.skipToPrevious() ?: false
+        if (result) {
+            // 現在のメディアを更新
+            _currentMedia.value = serviceConnection.service.value?.getCurrentMediaItem()
+        }
+        return result
     }
 
     /**
      * キュー内の特定のインデックスにスキップ
      */
     fun skipToQueueItem(index: Int): Boolean {
-        return serviceConnection.service.value?.skipToQueueItem(index) ?: false
+        val result = serviceConnection.service.value?.skipToQueueItem(index) ?: false
+        if (result) {
+            // 現在のメディアを更新
+            _currentMedia.value = serviceConnection.service.value?.getCurrentMediaItem()
+        }
+        return result
     }
 
     /**
